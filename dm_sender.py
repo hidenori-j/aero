@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import messagebox, filedialog
 from datetime import datetime
 import os
+import unicodedata
 
 class DMSenderApp:
     def __init__(self):
@@ -37,7 +38,13 @@ class DMSenderApp:
             self.csv_path = file_path
             self.file_label.config(text=f"選択されたファイル:\n{os.path.basename(file_path)}")
             self.execute_button.config(state='normal')  # ファイル選択後に実行ボタンを有効化
-        
+    
+    def normalize_column_names(self, columns):
+        """
+        列名の全角数字を半角数字に変換し、先頭と末尾のスペースを削除するヘルパー関数
+        """
+        return [''.join([unicodedata.normalize('NFKC', c) for c in col]).strip() for col in columns]
+    
     def process_dm(self):
         if not self.csv_path:
             messagebox.showerror("エラー", "CSVファイルを選択してください")
@@ -67,83 +74,133 @@ class DMSenderApp:
                 
             print("3. CSVファイル読み込み完了")
             
-            print("4. DM停止フラグ確認")
-            df = df[df['ＤＭ停止'].fillna('').str.strip() != '停止']
+            # 列名の正規化
+            df.columns = self.normalize_column_names(df.columns)
+            print("4. 列名の正規化完了")
             
-            print("5. 発送回数のソート開始")
-            latest_send_date = self._get_latest_send_date_column(df)
-            df['送信回数'] = df[[col for col in df.columns if '回発送日' in col]].notna().sum(axis=1)
-            df = df.sort_values('送信回数')
-            print("6. ソート完了")
+            # デバッグ: 正規化後の列名を表示
+            print("現在の DataFrame の列名:")
+            print(df.columns.tolist())
             
-            print("7. 送信リスト作成開始")
-            send_list = df.head(count)[['郵便番号', '宛先住所１', '送付先名', '管理者氏名']]
-            send_list['敬称'] = '様'
+            print("5. DM停止フラグ確認")
+            if 'DM停止' not in df.columns:
+                raise KeyError("'DM停止' 列が存在しません")
+            df = df[df['DM停止'].fillna('').str.strip() != '停止']
+            print(f"DM停止フラグ確認完了。対象行数: {len(df)}")
             
-            print("8. ファイル出力準備")
+            print("6. 発送回数のソート開始")
+            # 発送回数の列名を取得（実際の列名に合わせて変更してください）
+            send_count_col = '発送回数'  # 実際の列名に合わせて変更
+            if send_count_col not in df.columns:
+                raise KeyError(f"'{send_count_col}' 列が存在しません")
+            df = df.sort_values(by=send_count_col, ascending=False)
+            print("7. ソート完了")
+            
+            print("8. 送信リスト作成開始")
+            send_list = df.head(count).copy()
+            print(f"送信リストの作成完了。送信件数: {len(send_list)}")
+            
+            # 最新の発送回数を取得して新しい発送日列名を作成
+            latest_send_count = send_list[send_count_col].max()
+            new_send_count = latest_send_count + 1
+            latest_send_date = f'第{new_send_count}回発送日'
+            print(f"新しい発送日列名: {latest_send_date}")
+            
+            # 新しい発送日列を追加
+            df = self._add_new_send_date_column(df, f'第{latest_send_count}回発送日', latest_send_date)
+            print(f"列追加後の DataFrame の列名:")
+            print(df.columns.tolist())
+            
+            print("9. 発送日更新処理開始")
+            df = self._update_send_dates(df, send_list.index, latest_send_date)
+            print("発送日更新処理完了")
+            
+            # デバッグ: 更新後の DataFrame の確認
+            print("更新後の DataFrame の一部:")
+            print(df.head())
+            
+            print("10. ファイル出力準備")
+            # 送信リストの作成（.copyを使用して明示的にコピーを作成）
+            required_columns = {'郵便番号', '宛先住所1', '送付先名', '管理者氏名'}
+            if required_columns.issubset(send_list.columns):
+                output_list = send_list[['郵便番号', '宛先住所1', '送付先名', '管理者氏名']].copy()
+                output_list.loc[:, '敬称'] = '様'
+            else:
+                missing_cols = required_columns - set(send_list.columns)
+                raise KeyError(f"必要な列が不足しています: {missing_cols}")
+            
+            # デバッグ: 送信リストの確認
+            print("送信リストの作成完了。送信リストの一部:")
+            print(output_list.head())
+            
+            # ファイル名の生成
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             excel_dir = os.path.dirname(self.csv_path)
-            csv_filename = os.path.join(excel_dir, f'送信リ��ト_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv')
             
-            print("9. CSVファイル出力")
-            send_list.to_csv(csv_filename, index=False, encoding='cp932')
+            # 送信リストの保存
+            list_filename = os.path.join(excel_dir, f'送信リスト_{timestamp}.csv')
+            output_list.to_csv(list_filename, index=False, encoding='cp932')
+            print(f"送信リストを保存しました: {list_filename}")
             
-            print("10. 発送日更新処理開始")
-            self._update_send_dates(df, send_list.index, latest_send_date)
+            # 更新したマスターの保存
+            master_filename = os.path.join(excel_dir, f'マスター_{timestamp}.csv')
+            df.to_csv(master_filename, index=False, encoding='cp932')
+            print(f"更新マスターを保存しました: {master_filename}")
+            print(f"作成したファイル:")
+            print(f"- 送信リスト: {os.path.basename(list_filename)}")
+            print(f"- 更新マスター: {os.path.basename(master_filename)}")
+            messagebox.showinfo("完了", f"処理が完了しました\n作成ファイル:\n- {os.path.basename(list_filename)}\n- {os.path.basename(master_filename)}")
             
-            print("11. 処理完了")
-            messagebox.showinfo("完了", f"処理が完了しました\n作成ファイル: {os.path.basename(csv_filename)}")
             self.root.destroy()
             
         except ValueError as ve:
             print(f"ValueError発生: {str(ve)}")
             messagebox.showerror("エラー", "有効な数値を入力してください")
+        except KeyError as ke:
+            print(f"KeyError発生: {str(ke)}")
+            messagebox.showerror("エラー", f"必要な列が見つかりません: {str(ke)}")
         except Exception as e:
             print(f"エラー発生箇所の詳細: {str(e)}")
             print(f"エラーの種類: {type(e)}")
             messagebox.showerror("エラー", f"処理中にエラーが発生しました:\n{str(e)}")
-            
-    def _get_latest_send_date_column(self, df):
-        send_date_cols = [col for col in df.columns if '回発送日' in col]
-        max_filled_col = None
-        max_filled_num = 0
-
-        # 各行で最後に日付が入っている列を見つける
-        for col in send_date_cols:
-            num = int(col.replace('第', '').replace('回発送日', ''))
-            if num > max_filled_num and not df[col].isna().all():
-                max_filled_num = num
-                max_filled_col = col
-
-        # 次の列名を生成
-        next_num = max_filled_num + 1 if max_filled_num else 1
-        new_col = f'第{next_num}回発送日'
-        
-        # 新しい列がまだない場合は作成
-        if new_col not in df.columns:
-            df[new_col] = None
-        
-        return new_col
+    
+    def _add_new_send_date_column(self, df, prev_col, new_col):
+        try:
+            if prev_col in df.columns:
+                prev_idx = df.columns.get_loc(prev_col)
+                df.insert(prev_idx + 1, new_col, None)
+                print(f"新しい列 '{new_col}' を '{prev_col}' の後ろに追加しました")
+            else:
+                # 前の列が存在しない場合は最後に追加
+                df[new_col] = None
+                print(f"新しい列 '{new_col}' を最後に追加しました")
+            return df
+        except Exception as e:
+            print(f"新しい発送日列の追加でエラー発生: {str(e)}")
+            raise
         
     def _update_send_dates(self, df, target_indices, date_column):
         try:
-            # 元のCSVファイルを読み直す
-            original_df = pd.read_csv(self.csv_path, encoding='cp932')
-            
-            # 発送日の列のみを更新
+            # 発送日の列に今日の日付を挿入
             today = datetime.now().strftime('%Y年%m月%d日')
-            original_df.loc[target_indices, date_column] = today
+            print(f"今日の日付: {today}")
+
+            # 対象の行のみ日付を更新
+            print(f"対象インデックス数: {len(target_indices)}")
+            df.loc[target_indices, date_column] = today
+            print(f"'{date_column}' 列の更新が完了しました")
             
-            # 新しいファイル名を生成
-            file_name = os.path.splitext(self.csv_path)[0]
-            new_excel_path = f"{file_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            # デバッグ: 更新された行の確認
+            updated_rows = df.loc[target_indices, date_column]
+            print(f"更新された '{date_column}' 列の一部:")
+            print(updated_rows.head())
             
-            # 更新したデータを新しいExcelファイルとして保存
-            original_df.to_excel(new_excel_path, index=False, engine='openpyxl')
-            
+            return df  # 更新したDataFrameを返す
+                
         except Exception as e:
-            print(f"更新処理でエラー発生: {str(e)}")
+            print(f"発送日更新処理でエラー発生: {str(e)}")
             raise
-        
+
     def run(self):
         self.root.mainloop()
 
