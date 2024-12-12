@@ -4,6 +4,7 @@ from tkinter import messagebox, filedialog
 from datetime import datetime
 import os
 import unicodedata
+import re
 
 class DMSenderApp:
     def __init__(self):
@@ -88,38 +89,44 @@ class DMSenderApp:
             df = df[df['DM停止'].fillna('').str.strip() != '停止']
             print(f"DM停止フラグ確認完了。対象行数: {len(df)}")
             
-            print("6. 発送回数のソート開始")
-            # 発送回数の列名を取得（実際の列名に合わせて変更してください）
-            send_count_col = '発送回数'  # 実際の列名に合わせて変更
-            if send_count_col not in df.columns:
-                raise KeyError(f"'{send_count_col}' 列が存在しません")
-            df = df.sort_values(by=send_count_col, ascending=False)
-            print("7. ソート完了")
+            print("6. 発送回数の自動検出とソート開始")
+            # 発送回数を表す列を自動で検出
+            send_date_pattern = r'^第(\d+)回発送日$'
+            send_date_cols = [col for col in df.columns if re.match(send_date_pattern, col)]
+            print(f"発送日列のリスト: {send_date_cols}")
             
-            print("8. 送信リスト作成開始")
+            if send_date_cols:
+                # 発送回数を抽出して最大値を取得
+                send_counts = [int(re.match(send_date_pattern, col).group(1)) for col in send_date_cols]
+                latest_send_count = max(send_counts)
+                print(f"最新の発送回数: 第{latest_send_count}回")
+            else:
+                latest_send_count = 0
+                print("発送日列が存在しないため、発送回数を0とします")
+            
+            # 最新の発送回数に基づき新しい発送回数を設定
+            new_send_count = latest_send_count + 1
+            new_send_date_col = f'第{new_send_count}回発送日'
+            print(f"新しい発送日列名: {new_send_date_col}")
+            
+            print("7. 送信リスト作成開始")
             send_list = df.head(count).copy()
             print(f"送信リストの作成完了。送信件数: {len(send_list)}")
             
-            # 最新の発送回数を取得して新しい発送日列名を作成
-            latest_send_count = send_list[send_count_col].max()
-            new_send_count = latest_send_count + 1
-            latest_send_date = f'第{new_send_count}回発送日'
-            print(f"新しい発送日列名: {latest_send_date}")
-            
             # 新しい発送日列を追加
-            df = self._add_new_send_date_column(df, f'第{latest_send_count}回発送日', latest_send_date)
+            df = self._add_new_send_date_column(df, send_date_cols[-1] if send_date_cols else None, new_send_date_col)
             print(f"列追加後の DataFrame の列名:")
             print(df.columns.tolist())
             
-            print("9. 発送日更新処理開始")
-            df = self._update_send_dates(df, send_list.index, latest_send_date)
+            print("8. 発送日更新処理開始")
+            df = self._update_send_dates(df, send_list.index, new_send_date_col)
             print("発送日更新処理完了")
             
             # デバッグ: 更新後の DataFrame の確認
             print("更新後の DataFrame の一部:")
             print(df.head())
             
-            print("10. ファイル出力準備")
+            print("9. ファイル出力準備")
             # 送信リストの作成（.copyを使用して明示的にコピーを作成）
             required_columns = {'郵便番号', '宛先住所1', '送付先名', '管理者氏名'}
             if required_columns.issubset(send_list.columns):
@@ -142,7 +149,7 @@ class DMSenderApp:
             output_list.to_csv(list_filename, index=False, encoding='cp932')
             print(f"送信リストを保存しました: {list_filename}")
             
-            # 更新したマスターの保存
+            # 更新したマスター���保存
             master_filename = os.path.join(excel_dir, f'マスター_{timestamp}.csv')
             df.to_csv(master_filename, index=False, encoding='cp932')
             print(f"更新マスターを保存しました: {master_filename}")
@@ -166,12 +173,17 @@ class DMSenderApp:
     
     def _add_new_send_date_column(self, df, prev_col, new_col):
         try:
-            if prev_col in df.columns:
-                prev_idx = df.columns.get_loc(prev_col)
-                df.insert(prev_idx + 1, new_col, None)
-                print(f"新しい列 '{new_col}' を '{prev_col}' の後ろに追加しました")
+            if prev_col:
+                if prev_col in df.columns:
+                    prev_idx = df.columns.get_loc(prev_col)
+                    df.insert(prev_idx + 1, new_col, None)
+                    print(f"新しい列 '{new_col}' を '{prev_col}' の後ろに追加しました")
+                else:
+                    print(f"前の列 '{prev_col}' が存在しないため、新しい列 '{new_col}' を最後に追加します")
+                    df[new_col] = None
+                    print(f"新しい列 '{new_col}' を最後に追加しました")
             else:
-                # 前の列が存在しない場合は最後に追加
+                # 前の列が指定されていない場合は新しい列を最後に追加
                 df[new_col] = None
                 print(f"新しい列 '{new_col}' を最後に追加しました")
             return df
