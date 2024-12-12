@@ -105,38 +105,22 @@ class DMSenderApp:
     def _get_latest_send_date_column(self, df):
         send_date_cols = [col for col in df.columns if '回発送日' in col]
         max_filled_col = None
-        max_filled_num = 8  # 第9回から始めるために8を初期値とする
+        max_filled_num = 0
 
         # 各行で最後に日付が入っている列を見つける
         for col in send_date_cols:
-            try:
-                num = int(col.replace('第', '').replace('回発送日', ''))
-                if num > max_filled_num and not df[col].isna().all():
-                    max_filled_num = num
-                    max_filled_col = col
-            except ValueError:
-                continue
+            num = int(col.replace('第', '').replace('回発送日', ''))
+            if num > max_filled_num and not df[col].isna().all():
+                max_filled_num = num
+                max_filled_col = col
 
         # 次の列名を生成
-        next_num = max_filled_num + 1 if max_filled_num >= 8 else 9
+        next_num = max_filled_num + 1 if max_filled_num else 1
         new_col = f'第{next_num}回発送日'
         
-        # 新しい列を適切な位置に挿入
+        # 新しい列がまだない場合は作成
         if new_col not in df.columns:
-            # 最後の発送日列のインデックスを見つける
-            last_date_col_idx = -1
-            for i, col in enumerate(df.columns):
-                if '回発送日' in col:
-                    last_date_col_idx = i
-            
-            # 既存の列リストを取得
-            cols = df.columns.tolist()
-            
-            # 新しい列を最後の発送日列の直後に挿入
-            if last_date_col_idx != -1:
-                cols.insert(last_date_col_idx + 1, new_col)
-                df = df.reindex(columns=cols)
-                df[new_col] = None
+            df[new_col] = None
         
         return new_col
         
